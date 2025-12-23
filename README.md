@@ -1,5 +1,5 @@
 # PainterImageLoad 此节点由抖音博主：绘画小子 制作 
-一个 ComfyUI 节点：保存、预览并向下游节点传递图像，同时支持“仅执行此节点”中途遮罩编辑。
+PainterImageLoad，一个 ComfyUI 节点：保存、预览并向下游节点传递图像，同时支持“仅执行此节点”中途遮罩编辑。
 <img width="2886" height="1051" alt="Y}19GFM8IJ$B(U}57Q3AU6D" src="https://github.com/user-attachments/assets/2f70dd3f-5d02-4445-bb34-7109e95b7ae9" />
 
 ## 功能 | Features
