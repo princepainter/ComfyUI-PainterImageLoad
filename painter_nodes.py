@@ -16,8 +16,10 @@ class PainterImageLoad:
         files = [f for f in os.listdir(input_dir) if os.path.isfile(os.path.join(input_dir, f))]
         return {
             "required": {
-                "image": ("IMAGE",),
                 "image_name": (sorted(files), {"image_upload": True})
+            },
+            "optional": {
+                "image": ("IMAGE",)
             }
         }
 
@@ -25,25 +27,35 @@ class PainterImageLoad:
     FUNCTION = "process_image"
     CATEGORY = "image"
     
-    # This flag enables the "Execute Selected Nodes" option in the context menu
-    # and treats the node as a terminal/output node.
     OUTPUT_NODE = True
 
-    def process_image(self, image, image_name):
-        # Convert incoming tensor to PIL Image for saving
-        # Assuming input shape is [B, H, W, C], taking the first image in batch
-        i = 255. * image[0].cpu().numpy()
-        img = Image.fromarray(np.clip(i, 0, 255).astype(np.uint8))
+    def process_image(self, image_name, image=None):
+        is_stream_mode = image is not None
         
-        # Define sync filename for frontend compatibility
-        filename = "painter_sync.png"
-        save_path = os.path.join(self.output_dir, filename)
+        # Use the selected filename as the display name in both modes
+        display_name = image_name
         
-        # Save to input directory to ensure Mask Editor can access it
-        img.save(save_path, pnginfo=None)
+        # Path for the file that will be displayed in UI
+        display_path = os.path.join(self.output_dir, display_name)
+        
+        # Source image for processing and mask generation
+        if is_stream_mode:
+            # Convert tensor to PIL
+            i = 255. * image[0].cpu().numpy()
+            img_pil = Image.fromarray(np.clip(i, 0, 255).astype(np.uint8))
+            # Save to the display path for UI preview
+            img_pil.save(display_path, pnginfo=None)
+        else:
+            # Load from selected file, ensure it exists at display path
+            source_path = folder_paths.get_annotated_filepath(image_name)
+            img_pil = Image.open(source_path)
+            
+            # If source is not at display path, copy it there
+            if source_path != display_path:
+                img_pil.save(display_path, pnginfo=None)
 
-        # Handle MASK processing using the saved file
-        image_path = folder_paths.get_annotated_filepath(filename)
+        # Generate mask from the display file
+        image_path = folder_paths.get_annotated_filepath(display_name)
         img_for_mask = Image.open(image_path)
         
         output_masks = []
@@ -53,25 +65,42 @@ class PainterImageLoad:
                 mask = np.array(i.getchannel('A')).astype(np.float32) / 255.0
                 mask = 1. - torch.from_numpy(mask)
             else:
-                # Default mask if no alpha channel exists
-                mask = torch.zeros((image.shape[1], image.shape[2]), dtype=torch.float32)
+                mask = torch.zeros((img_pil.height, img_pil.width), dtype=torch.float32)
             output_masks.append(mask.unsqueeze(0))
 
         output_mask = torch.cat(output_masks, dim=0) if len(output_masks) > 1 else output_masks[0]
+        
+        # Prepare output tensor
+        if not is_stream_mode:
+            source_img_np = np.array(img_pil.convert('RGB')).astype(np.float32) / 255.0
+            image_tensor = torch.from_numpy(source_img_np).unsqueeze(0)
+        else:
+            image_tensor = image
 
-        # Return UI signal to force refresh the preview and filename on the node
         return {
             "ui": {
-                "images": [{"filename": filename, "type": "input"}],
+                # Always return the selected filename for UI consistency
+                "images": [{"filename": display_name, "type": "input"}],
             },
-            "result": (image, output_mask)
+            "result": (image_tensor, output_mask)
         }
 
     @classmethod
-    def IS_CHANGED(s, image, image_name):
-        # Ensure node triggers whenever the input image tensor changes
-        return float(torch.mean(image))
+    def IS_CHANGED(s, image_name, image=None):
+        # This is critical: return a unique value when upstream image is connected
+        # This forces the frontend to refresh the preview
+        if image is not None:
+            # Create a unique signature based on the actual image content
+            # This ensures the UI updates on every new upstream image
+            mean_val = float(torch.mean(image))
+            # Add hash of the image tensor to force refresh
+            image_hash = hashlib.md5(image[0].cpu().numpy().tobytes()).hexdigest()[:8]
+            return f"stream_{image_hash}_{mean_val}"
+        else:
+            # For manual mode, use file modification time
+            source_path = folder_paths.get_annotated_filepath(image_name)
+            return os.path.getmtime(source_path)
 
     @classmethod
-    def VALIDATE_INPUTS(s, image, image_name):
+    def VALIDATE_INPUTS(s, image_name, image=None):
         return True
